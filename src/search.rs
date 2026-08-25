@@ -1,4 +1,5 @@
 pub mod correction;
+mod reliability;
 pub mod engine;
 pub mod history;
 pub mod movepicker;
@@ -15,6 +16,7 @@ use crate::board::movegen::MoveFilter;
 use crate::board::moves::{Move, MoveList};
 use crate::board::piece::Piece;
 use crate::board::Board;
+use crate::search::reliability::ReliabilityHistory;
 use crate::search::history::*;
 use crate::search::movepicker::MovePicker;
 use crate::search::movepicker::Stage::{BadNoisies, GoodNoisies};
@@ -676,11 +678,68 @@ fn alpha_beta<NODE: NodeType>(
             let min_reduced_depth = 1;
             let max_reduced_depth = new_depth + (1 + (legal_moves <= 3) as i32);
             let reduced_depth = (new_depth - (r / 1024)).clamp(min_reduced_depth, max_reduced_depth);
+            let original_reduction = (new_depth - reduced_depth).max(0);
+            let audit_context = (original_reduction >= 2
+                && !pv_node
+                && !singular_search
+                && is_quiet
+                && !in_check
+                && !gives_check)
+                .then(|| ReliabilityHistory::context(depth, original_reduction, history_score, pc));
+            let protection = audit_context
+                .map(|context| td.reliability.reduction_adjustment(context))
+                .unwrap_or(0);
+            let reduced_depth = if protection == 0 {
+                reduced_depth
+            } else {
+                let effective_r =
+                    r.min(original_reduction * 1024 + r.rem_euclid(1024)) - protection;
+                (new_depth - effective_r / 1024).clamp(min_reduced_depth, max_reduced_depth)
+            };
+            let applied_reduction = (new_depth - reduced_depth).max(0);
 
             // For moves eligible for reduction, we apply the reduction and search with a null window.
-            td.stack[ply].reduction = r;
+            td.stack[ply].reduction = applied_reduction;
             score = -alpha_beta::<NonPV>(&board, td, reduced_depth, ply + 1, -alpha - 1, -alpha, true);
             td.stack[ply].reduction = 0;
+
+            let audit_nodes = td.local_nodes();
+            let should_audit = score <= alpha
+                && !td.abort.load(Relaxed)
+                && audit_context.is_some_and(|context| {
+                    td.reliability.should_audit(
+                        context,
+                        original_board.hash(),
+                        mv,
+                        depth,
+                        audit_nodes,
+                    )
+                })
+                && !is_repetition(&board, td);
+            if should_audit {
+                let context = audit_context.unwrap();
+                let started_at = td.reliability.begin_audit(audit_nodes);
+                let audited = -alpha_beta::<NonPV>(
+                    &board,
+                    td,
+                    new_depth,
+                    ply + 1,
+                    -alpha - 1,
+                    -alpha,
+                    !cut_node,
+                );
+                let finished_at = td.local_nodes();
+                td.reliability.finish_audit(started_at, finished_at);
+                if !td.abort.load(Relaxed) {
+                    let missed = audited > alpha;
+                    if applied_reduction == original_reduction {
+                        td.reliability.record(context, missed);
+                    }
+                    if missed {
+                        score = audited;
+                    }
+                }
+            }
 
             // If the reduced search beat alpha, re-search at full depth, with a null window.
             if score > alpha && new_depth > reduced_depth {

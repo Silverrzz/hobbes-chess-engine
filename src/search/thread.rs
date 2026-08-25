@@ -5,6 +5,7 @@ use std::time::Instant;
 use crate::board::moves::Move;
 use crate::evaluation::NNUE;
 use crate::search::correction::CorrectionHistories;
+use crate::search::reliability::ReliabilityHistory;
 use crate::search::history::Histories;
 use crate::search::node::NodeStack;
 use crate::search::time::{LimitType, SearchLimits};
@@ -34,6 +35,7 @@ pub struct ThreadData {
     pub root_ply: usize,
     pub history: Histories,
     pub correction_history: CorrectionHistories,
+    pub(super) reliability: ReliabilityHistory,
     pub lmr: LmrTable,
     pub node_table: NodeTable,
     pub limits: SearchLimits,
@@ -65,6 +67,7 @@ impl ThreadData {
             root_ply: 0,
             history: Histories::default(),
             correction_history: CorrectionHistories::default(),
+            reliability: ReliabilityHistory::default(),
             lmr: LmrTable::default(),
             node_table: NodeTable::default(),
             limits: SearchLimits::new(None, None, None, None, None, 0),
@@ -140,6 +143,7 @@ impl ThreadData {
     }
 
     pub fn reset_local(&mut self) {
+        self.reliability.new_search();
         self.stack = NodeStack::default();
         self.node_table.clear();
         self.shared.nodes.store(0, Relaxed);
@@ -166,6 +170,7 @@ impl ThreadData {
         self.root_ply = 0;
         self.history.clear();
         self.correction_history.clear();
+        self.reliability.clear();
     }
 
     pub fn time(&self) -> u128 {
