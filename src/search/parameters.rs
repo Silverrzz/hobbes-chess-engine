@@ -122,6 +122,7 @@ tunable_params! {
     hrh_warmup_nodes             = 2047, 512..=8192,       false;
     hrh_budget_divisor           = 260, 128..=512,         false;
     hrh_sample_divisor           = 33, 1..=128,            false;
+    hrh_fail_low_scale           = 64, 16..=256,           false;
     hrh_max_depth                = 8, 4..=12,              false;
     hrh_miss_bonus               = 72, 32..=112,           false;
     hrh_safe_malus               = 2, 1..=8,               false;

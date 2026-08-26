@@ -1,8 +1,8 @@
 use crate::board::{moves::Move, piece::Piece};
 use crate::search::parameters::{
-    hrh_budget_divisor, hrh_decay_divisor, hrh_history_band, hrh_max_depth, hrh_min_confidence,
-    hrh_miss_bonus, hrh_protection, hrh_protection_threshold, hrh_safe_gravity, hrh_safe_malus,
-    hrh_sample_divisor, hrh_warmup_nodes,
+    hrh_budget_divisor, hrh_decay_divisor, hrh_fail_low_scale, hrh_history_band, hrh_max_depth,
+    hrh_min_confidence, hrh_miss_bonus, hrh_protection, hrh_protection_threshold,
+    hrh_safe_gravity, hrh_safe_malus, hrh_sample_divisor, hrh_warmup_nodes,
 };
 
 const DEPTH_BUCKETS: usize = 4;
@@ -75,9 +75,12 @@ impl ReliabilityHistory {
         key: u64,
         mv: Move,
         depth: i32,
+        fail_low: i32,
         nodes: u64,
     ) -> bool {
-        if self.active || depth > hrh_max_depth() || !sample(key, mv, depth, context.0) {
+        let divisor = hrh_sample_divisor() as u64
+            * (1 + fail_low as u64 / hrh_fail_low_scale() as u64);
+        if self.active || depth > hrh_max_depth() || !sample(key, mv, depth, context.0, divisor) {
             return false;
         }
 
@@ -86,7 +89,20 @@ impl ReliabilityHistory {
         if normal_nodes < warmup {
             return false;
         }
-        self.audit_nodes <= normal_nodes.saturating_sub(warmup) / hrh_budget_divisor() as u64
+        let budget = normal_nodes.saturating_sub(warmup) / hrh_budget_divisor() as u64;
+        self.audit_nodes <= budget.min(2 * warmup)
+    }
+
+    pub(super) fn research_depth(
+        &self,
+        context: AuditContext,
+        depth: i32,
+        reduction: i32,
+        fail_low: i32,
+    ) -> i32 {
+        let risk = i32::from(self.entries[context.0].risk);
+        let scale = hrh_fail_low_scale() * (i32::from(MAX_RISK) + risk) / i32::from(MAX_RISK);
+        depth - reduction * fail_low / (fail_low + scale)
     }
 
     pub(super) fn begin_audit(&mut self, nodes: u64) -> u64 {
@@ -128,7 +144,7 @@ impl Default for ReliabilityHistory {
     }
 }
 
-fn sample(key: u64, mv: Move, depth: i32, context: usize) -> bool {
+fn sample(key: u64, mv: Move, depth: i32, context: usize, divisor: u64) -> bool {
     let mut mixed = key
         ^ u64::from(mv.0).wrapping_mul(0x9e37_79b9_7f4a_7c15)
         ^ (depth as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
@@ -137,5 +153,5 @@ fn sample(key: u64, mv: Move, depth: i32, context: usize) -> bool {
     mixed = mixed.wrapping_mul(0xbf58_476d_1ce4_e5b9);
     mixed ^= mixed >> 27;
     mixed = mixed.wrapping_mul(0x94d0_49bb_1331_11eb);
-    (mixed ^ (mixed >> 31)) <= u64::MAX / hrh_sample_divisor() as u64
+    (mixed ^ (mixed >> 31)) <= u64::MAX / divisor
 }

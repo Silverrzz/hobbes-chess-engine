@@ -712,17 +712,24 @@ fn alpha_beta<NODE: NodeType>(
                         original_board.hash(),
                         mv,
                         depth,
+                        alpha - score,
                         audit_nodes,
                     )
                 })
                 && !is_repetition(&board, td);
             if should_audit {
                 let context = audit_context.unwrap();
+                let research_depth = td.reliability.research_depth(
+                    context,
+                    new_depth,
+                    original_reduction,
+                    alpha - score,
+                ).clamp(reduced_depth + 1, new_depth);
                 let started_at = td.reliability.begin_audit(audit_nodes);
                 let audited = -alpha_beta::<NonPV>(
                     &board,
                     td,
-                    new_depth,
+                    research_depth,
                     ply + 1,
                     -alpha - 1,
                     -alpha,
@@ -732,7 +739,9 @@ fn alpha_beta<NODE: NodeType>(
                 td.reliability.finish_audit(started_at, finished_at);
                 if !td.abort.load(Relaxed) {
                     let missed = audited > alpha;
-                    if applied_reduction == original_reduction {
+                    if applied_reduction == original_reduction
+                        && (missed || research_depth == new_depth)
+                    {
                         td.reliability.record(context, missed);
                     }
                     if missed {
