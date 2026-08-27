@@ -705,6 +705,7 @@ fn alpha_beta<NODE: NodeType>(
 
             let audit_nodes = td.local_nodes();
             let should_audit = score <= alpha
+                && reduced_depth < new_depth
                 && !td.abort.load(Relaxed)
                 && audit_context.is_some_and(|context| {
                     td.reliability.should_audit(
