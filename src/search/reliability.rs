@@ -60,13 +60,11 @@ impl ReliabilityHistory {
 
     pub(super) fn reduction_adjustment(&self, context: AuditContext) -> i32 {
         let entry = self.entries[context.0];
-        if i32::from(entry.confidence) >= hrh_min_confidence()
-            && i32::from(entry.risk) >= hrh_protection_threshold()
-        {
-            hrh_protection()
-        } else {
-            0
+        if i32::from(entry.confidence) < hrh_min_confidence() {
+            return 0;
         }
+        let threshold = hrh_protection_threshold();
+        (i32::from(entry.risk) - threshold) * hrh_protection() * 2 / threshold.max(1)
     }
 
     pub(super) fn should_audit(

@@ -686,20 +686,20 @@ fn alpha_beta<NODE: NodeType>(
                 && !in_check
                 && !gives_check)
                 .then(|| ReliabilityHistory::context(depth, original_reduction, history_score, pc));
-            let protection = audit_context
+            let adjustment = audit_context
                 .map(|context| td.reliability.reduction_adjustment(context))
                 .unwrap_or(0);
-            let reduced_depth = if protection == 0 {
-                reduced_depth
+            let effective_r = if adjustment == 0 {
+                r
             } else {
-                let effective_r =
-                    r.min(original_reduction * 1024 + r.rem_euclid(1024)) - protection;
-                (new_depth - effective_r / 1024).clamp(min_reduced_depth, max_reduced_depth)
+                r.min(original_reduction * 1024 + r.rem_euclid(1024)) - adjustment
             };
+            let reduced_depth =
+                (new_depth - effective_r / 1024).clamp(min_reduced_depth, max_reduced_depth);
             let applied_reduction = (new_depth - reduced_depth).max(0);
 
             // For moves eligible for reduction, we apply the reduction and search with a null window.
-            td.stack[ply].reduction = applied_reduction;
+            td.stack[ply].reduction = effective_r;
             score = -alpha_beta::<NonPV>(&board, td, reduced_depth, ply + 1, -alpha - 1, -alpha, true);
             td.stack[ply].reduction = 0;
 
@@ -739,9 +739,7 @@ fn alpha_beta<NODE: NodeType>(
                 td.reliability.finish_audit(started_at, finished_at);
                 if !td.abort.load(Relaxed) {
                     let missed = audited > alpha;
-                    if applied_reduction == original_reduction
-                        && (missed || research_depth == new_depth)
-                    {
+                    if missed || research_depth == new_depth && applied_reduction >= original_reduction {
                         td.reliability.record(context, missed);
                     }
                     if missed {
